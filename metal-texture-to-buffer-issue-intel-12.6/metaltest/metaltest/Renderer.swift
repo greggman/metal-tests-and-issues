@@ -220,6 +220,10 @@ class Renderer : NSObject, MTKViewDelegate {
             let localSrcOrigin = MTLOrigin(x: 0, y: row, z: 0)
             let localDstSize = MTLSize(width: dstSize.width, height: 1, depth: 1)
             let localDstOffset = destinationOffset + dstBufferBytesPerRow * row
+
+              print("\n    Format: \(format.name), type: \(texInfo.name) texSize: \(srcSize.width), \(srcSize.height), \(srcSize.depth),\n     copyOrigin: \(localSrcOrigin.x), \(localSrcOrigin.y), \(localSrcOrigin.z)\n     copySize: \(localDstSize.width), \(localDstSize.height), \(localDstSize.depth),\n     destinationOffset: \(localDstOffset), destinationBytesPerRow: \(dstBufferBytesPerRow), destinationBytesPerImage: \(dstBufferBytesPerImage)")
+
+              
             blitEncoder.copy(
               from: texture,
               sourceSlice: 0,
