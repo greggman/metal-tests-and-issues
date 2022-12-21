@@ -67,6 +67,7 @@ class Renderer : NSObject, MTKViewDelegate {
       let bytesPerPixel: Int;
     };
     let formats: [FormatInfo] = [
+      /*
       // 0
       FormatInfo(  format: .a8Unorm, name: "a8Unorm", bytesPerPixel: 1 ), //   Ordinary format with one 8-bit normalized unsigned integer component.
       FormatInfo(  format: .r8Unorm, name: "r8Unorm", bytesPerPixel: 1 ), //   Ordinary format with one 8-bit normalized unsigned integer component.
@@ -98,7 +99,9 @@ class Renderer : NSObject, MTKViewDelegate {
       //Ordinary 32-Bit Pixel Formats
       FormatInfo(  format: .r32Uint, name: "r32Uint", bytesPerPixel: 4 ), //   Ordinary format with one 32-bit unsigned integer component.
       FormatInfo(  format: .r32Sint, name: "r32Sint", bytesPerPixel: 4 ), //   Ordinary format with one 32-bit signed integer component.
+      */
       FormatInfo(  format: .r32Float, name: "r32Float", bytesPerPixel: 4 ), //   Ordinary format with one 32-bit floating-point component.
+      /*
       FormatInfo(  format: .rg16Unorm, name: "rg16Unorm", bytesPerPixel: 4 ), //   Ordinary format with two 16-bit normalized unsigned integer components.
       // 24
       FormatInfo(  format: .rg16Snorm, name: "rg16Snorm", bytesPerPixel: 4 ), //   Ordinary format with two 16-bit normalized signed integer components.
@@ -133,6 +136,7 @@ class Renderer : NSObject, MTKViewDelegate {
       FormatInfo(  format: .rgba32Uint, name: "rgba32Uint", bytesPerPixel: 16 ), //   Ordinary format with four 32-bit unsigned integer components in RGBA order.
       FormatInfo(  format: .rgba32Sint, name: "rgba32Sint", bytesPerPixel: 16 ), //   Ordinary format with four 32-bit signed integer components in RGBA order.
       FormatInfo(  format: .rgba32Float, name: "rgba32Float", bytesPerPixel: 16 ), //   Ordinary format with four 32-bit floating-point components in RGBA order.
+      */
     ]
 
     struct TypeInfo {
@@ -142,11 +146,11 @@ class Renderer : NSObject, MTKViewDelegate {
 
     let textureTypes: [TypeInfo] = [
       TypeInfo(type: .type2D, name: "type2D"),
-      TypeInfo(type: .type3D, name: "type3D"),
-      TypeInfo(type: .type2DArray, name: "type2DArray"),
+      //TypeInfo(type: .type3D, name: "type3D"),
+      //TypeInfo(type: .type2DArray, name: "type2DArray"),
     ];
 
-    let bufferSize = 300000
+    let bufferSize = 2048
     let dstBuffer = device.makeBuffer(length: bufferSize, options: [MTLResourceOptions.storageModeShared])!
     var count: UInt8 = 0;
 
@@ -162,13 +166,11 @@ class Renderer : NSObject, MTKViewDelegate {
       {
         let format = formats[ndx]
         count = count &+ 1
-        let srcOrigin = MTLOrigin(x: 3, y: 0, z: 0);
-        let srcSize = MTLSize(width: 10, height: 4, depth: textureType == .type3D ? 5 : 1);
-        //let srcSize = MTLSize(width: 2048, height: 4, depth: textureType == .type3D ? 5 : 1);
-        //let dstSize = MTLSize(width: 10, height: 3, depth: textureType == .type3D ? 5 : 1)
-        let dstSize = MTLSize(width: 5, height: 3, depth: textureType == .type3D ? 5 : 1)
-        let dstBufferBytesPerRow = max(8192, (dstSize.width + 3) * format.bytesPerPixel);
-        let dstBufferBytesPerImage = (dstSize.height + 3) * dstBufferBytesPerRow;
+        let srcOrigin = MTLOrigin(x: 0, y: 0, z: 0);
+        let srcSize = MTLSize(width: 64, height: 8, depth: textureType == .type3D ? 5 : 1);
+        let dstSize = MTLSize(width: 64, height: 8, depth: textureType == .type3D ? 5 : 1)
+        let dstBufferBytesPerRow = dstSize.width * format.bytesPerPixel;
+        let dstBufferBytesPerImage = dstSize.height * dstBufferBytesPerRow;
 
         let textureDescriptor: MTLTextureDescriptor = MTLTextureDescriptor()
         textureDescriptor.textureType = textureType
@@ -178,7 +180,7 @@ class Renderer : NSObject, MTKViewDelegate {
         textureDescriptor.depth = srcSize.depth;
 
         // let destinationOffset = 0;
-        let destinationOffset = 1 * format.bytesPerPixel
+        let destinationOffset = 0
 
         let dstEndOffset = destinationOffset + dstSize.height * dstBufferBytesPerRow
         if (dstEndOffset > bufferSize) {
@@ -214,16 +216,21 @@ class Renderer : NSObject, MTKViewDelegate {
             range: 0..<bufferSize,
             value: 1
           )
-          blitEncoder.copy(
-            from: texture,
-            sourceSlice: 0,
-            sourceLevel: 0,
-            sourceOrigin: srcOrigin,
-            sourceSize: dstSize,
-            to: dstBuffer,
-            destinationOffset: destinationOffset,
-            destinationBytesPerRow: dstBufferBytesPerRow,
-            destinationBytesPerImage: dstBufferBytesPerImage);
+          for row in 0..<dstSize.height {
+            let localSrcOrigin = MTLOrigin(x: 0, y: row, z: 0)
+            let localDstSize = MTLSize(width: dstSize.width, height: 1, depth: 1)
+            let localDstOffset = destinationOffset + dstBufferBytesPerRow * row
+            blitEncoder.copy(
+              from: texture,
+              sourceSlice: 0,
+              sourceLevel: 0,
+              sourceOrigin: localSrcOrigin,
+              sourceSize: localDstSize,
+              to: dstBuffer,
+              destinationOffset: localDstOffset,
+              destinationBytesPerRow: dstBufferBytesPerRow,
+              destinationBytesPerImage: dstBufferBytesPerImage);
+          }
           blitEncoder.endEncoding()
         }
 
