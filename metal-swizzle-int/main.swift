@@ -1,12 +1,27 @@
-
+// main.swift
+//
+// compile with:
+//    xcrun swiftc -o main main.swift -framework Metal -framework MetalKit -framework Foundation
+//
+// run with:
+//    ./main
+//
 import Metal
 import Foundation
 
 func main() {
-    guard let device = MTLCreateSystemDefaultDevice() else {
-        fatalError("Metal is not supported on this device")
+    let devices = MTLCopyAllDevices()
+    guard !devices.isEmpty else {
+        fatalError("No Metal devices found.")
     }
 
+    for device in devices {
+        print("Testing device: \(device.name)")
+        runTest(on: device)
+    }
+}
+
+func runTest(on device: MTLDevice) {
     guard let commandQueue = device.makeCommandQueue() else {
         fatalError("Could not create command queue")
     }
@@ -147,7 +162,6 @@ func main() {
 
         print("\(pixel[0]) \(pixel[1]) \(pixel[2]) \(pixel[3]) : swizzle: \(swizzleToString(swizzle.red)) \(swizzleToString(swizzle.green)) \(swizzleToString(swizzle.blue)) \(swizzleToString(swizzle.alpha))")
     }
-    exit(0)
 }
 
 main()
