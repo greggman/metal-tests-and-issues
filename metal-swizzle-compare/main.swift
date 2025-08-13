@@ -79,15 +79,35 @@ func runOnDevice(on device: MTLDevice) {
     }
 
     let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: 2, height: 2, mipmapped: false)
-    textureDescriptor.usage = [.shaderRead]
+    // The texture needs to be a destination for a blit copy, and a source for shader reading.
+    // According to Metal documentation, a blit destination must have .renderTarget or .shaderWrite usage.
+    textureDescriptor.usage = [.shaderRead, .renderTarget]
+    // On some hardware (like Intel GPUs), depth textures must have private storage.
+    // The default storage mode would be managed/shared to allow CPU access for `replace`,
+    // but that is not allowed for depth textures on this hardware.
+    textureDescriptor.storageMode = .private
     guard let depthTexture = device.makeTexture(descriptor: textureDescriptor) else {
         fatalError("Could not create depth texture")
     }
 
-    // Initialize texture data directly
+    // To initialize a private texture, we must use a command buffer.
+    // 1. Create a temporary buffer with the data.
+    // 2. Create a command buffer and a blit encoder.
+    // 3. Copy from the buffer to the texture.
     let textureData: [Float32] = [0.2, 0.4, 0.6, 0.8]
-    let region = MTLRegionMake2D(0, 0, 2, 2)
-    depthTexture.replace(region: region, mipmapLevel: 0, withBytes: textureData, bytesPerRow: 2 * MemoryLayout<Float32>.size)
+    let textureDataSize = textureData.count * MemoryLayout<Float32>.size
+    guard let stagingBuffer = device.makeBuffer(bytes: textureData, length: textureDataSize, options: []) else {
+        fatalError("Could not create staging buffer for texture data.")
+    }
+
+    guard let uploadCommandBuffer = commandQueue.makeCommandBuffer(),
+          let blitEncoder = uploadCommandBuffer.makeBlitCommandEncoder() else {
+        fatalError("Could not create command buffer or blit encoder for texture upload.")
+    }
+    blitEncoder.copy(from: stagingBuffer, sourceOffset: 0, sourceBytesPerRow: 2 * MemoryLayout<Float32>.size, sourceBytesPerImage: textureDataSize, sourceSize: MTLSize(width: 2, height: 2, depth: 1), to: depthTexture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+    blitEncoder.endEncoding()
+    uploadCommandBuffer.commit()
+    uploadCommandBuffer.waitUntilCompleted()
 
     let outputTextureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
     outputTextureDescriptor.usage = [.renderTarget, .shaderRead]
@@ -164,7 +184,6 @@ func runOnDevice(on device: MTLDevice) {
             print("\(Float(pixel[0]) / 255.0) \(Float(pixel[1]) / 255.0) \(Float(pixel[2]) / 255.0) \(Float(pixel[3]) / 255.0) : swizzle: \(swizzleToString(swizzle.red)) \(swizzleToString(swizzle.green)) \(swizzleToString(swizzle.blue)) \(swizzleToString(swizzle.alpha))")
         }
     }
-    exit(0)
 }
 
 main()
