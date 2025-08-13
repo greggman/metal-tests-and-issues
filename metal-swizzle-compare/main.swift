@@ -1,176 +1,170 @@
 // main.swift
 //
 // compile with:
-//    xcrun swiftc -o main main.swift -framework Metal -framework MetalKit -framework Foundation -framework CoreGraphics -framework UniformTypeIdentifiers
+//    xcrun swiftc -o main main.swift -framework Metal -framework MetalKit -framework Foundation
 //
 // run with:
 //    ./main
 //
 import Metal
-import MetalKit
 import Foundation
-import CoreGraphics // For CGImage
-import UniformTypeIdentifiers // For UTType (modern replacement for kUTTypePNG)
 
-// Extension to convert MTLPixelFormat to CGImageAlphaInfo
-extension MTLPixelFormat {
-    var cgImageAlphaInfo: CGImageAlphaInfo {
-        switch self {
-        case .rgba8Unorm, .rgba8Unorm_srgb:
-            return .premultipliedLast // Or .noneSkipLast, depending on your needs
-        case .bgra8Unorm, .bgra8Unorm_srgb:
-            return .premultipliedFirst // Or .noneSkipFirst
-        default:
-            return .none
-        }
+func main() {
+    let devices = MTLCopyAllDevices()
+    guard !devices.isEmpty else {
+        fatalError("No Metal devices found.")
+    }
+
+    for device in devices {
+        print("Testing device: \(device.name)")
+        runOnDevice(on: device)
     }
 }
 
-func main() {
-    guard let device = MTLCreateSystemDefaultDevice() else {
-        fatalError("Metal is not supported on this device.")
-    }
-
+func runOnDevice(on device: MTLDevice) {
     guard let commandQueue = device.makeCommandQueue() else {
-        fatalError("Failed to create command queue.")
+        fatalError("Could not create command queue")
     }
 
-    let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-        pixelFormat: .rgba8Unorm,
-        width: 256,
-        height: 256,
-        mipmapped: false
-    )
-    textureDescriptor.usage = [.renderTarget, .shaderRead] // Texture can be rendered to and read from
-    guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
-        fatalError("Failed to create texture.")
-    }
-
-    let metalSource = """
-    #include <metal_stdlib>
+    let shaderSource = """
     using namespace metal;
-
-    struct VertexIn {
-        float4 position [[attribute(0)]];
-    };
 
     struct VertexOut {
         float4 position [[position]];
     };
 
-    vertex VertexOut vertexShader(
-        VertexIn in [[stage_in]]
-    ) {
+    vertex VertexOut vertex_main(uint vid [[vertex_id]]) {
         VertexOut out;
-        out.position = in.position;
+        // A single large triangle that covers the entire viewport
+        float2 pos[3] = {
+            float2(-1.0, -1.0),
+            float2( 3.0, -1.0),
+            float2(-1.0,  3.0)
+        };
+        out.position = float4(pos[vid], 0.0, 1.0);
         return out;
     }
 
-    fragment float4 fragmentShader() {
-        return float4(1.0, 0.0, 0.0, 1.0); // Red color (RGBA)
+    fragment float4 fragment_main(VertexOut in [[stage_in]],
+                                   depth2d<float> texture [[texture(0)]],
+                                   sampler smp [[sampler(0)]]) {
+        constexpr float ref = 0.5;
+        float4 result = texture.gather_compare(smp, float2(0.5), ref);
+        return result;
     }
     """
 
     let library: MTLLibrary
     do {
-        library = try device.makeLibrary(source: metalSource, options: nil)
+        library = try device.makeLibrary(source: shaderSource, options: nil)
     } catch {
-        fatalError("Failed to create Metal library from source: \(error)")
+        fatalError("Could not compile shader library: \(error)")
     }
 
-    let vertexFunction = library.makeFunction(name: "vertexShader")
-    let fragmentFunction = library.makeFunction(name: "fragmentShader")
+    guard let vertexFunction = library.makeFunction(name: "vertex_main"),
+          let fragmentFunction = library.makeFunction(name: "fragment_main") else {
+        fatalError("Could not find shader functions")
+    }
 
-    let renderPipelineDescriptor = MTLRenderPipelineDescriptor()
-    renderPipelineDescriptor.vertexFunction = vertexFunction
-    renderPipelineDescriptor.fragmentFunction = fragmentFunction
-    renderPipelineDescriptor.colorAttachments[0].pixelFormat = texture.pixelFormat
+    let pipelineDescriptor = MTLRenderPipelineDescriptor()
+    pipelineDescriptor.vertexFunction = vertexFunction
+    pipelineDescriptor.fragmentFunction = fragmentFunction
+    pipelineDescriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
 
-    let vertexDescriptor = MTLVertexDescriptor()
-    vertexDescriptor.attributes[0].format = .float4
-    vertexDescriptor.attributes[0].offset = 0
-    vertexDescriptor.attributes[0].bufferIndex = 0
-
-    vertexDescriptor.layouts[0].stride = MemoryLayout<Float>.stride * 4
-    vertexDescriptor.layouts[0].stepFunction = .perVertex
-
-    renderPipelineDescriptor.vertexDescriptor = vertexDescriptor
-
-    let renderPipelineState: MTLRenderPipelineState
+    let pipelineState: MTLRenderPipelineState
     do {
-        renderPipelineState = try device.makeRenderPipelineState(descriptor: renderPipelineDescriptor)
+        pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
     } catch {
-        fatalError("Failed to create render pipeline state: \(error)")
+        fatalError("Could not create render pipeline state: \(error)")
     }
 
-    guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-        fatalError("Failed to create command buffer.")
+    let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: 2, height: 2, mipmapped: false)
+    textureDescriptor.usage = [.shaderRead]
+    guard let depthTexture = device.makeTexture(descriptor: textureDescriptor) else {
+        fatalError("Could not create depth texture")
     }
 
-    let renderPassDescriptor = MTLRenderPassDescriptor()
-    renderPassDescriptor.colorAttachments[0].texture = texture
-    renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0) // Black background
-    renderPassDescriptor.colorAttachments[0].loadAction = .clear
-    renderPassDescriptor.colorAttachments[0].storeAction = .store
+    // Initialize texture data directly
+    let textureData: [Float32] = [0.2, 0.4, 0.6, 0.8]
+    let region = MTLRegionMake2D(0, 0, 2, 2)
+    depthTexture.replace(region: region, mipmapLevel: 0, withBytes: textureData, bytesPerRow: 2 * MemoryLayout<Float32>.size)
 
-    guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-        fatalError("Failed to create render command encoder.")
+    let outputTextureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+    outputTextureDescriptor.usage = [.renderTarget, .shaderRead]
+    guard let outputTexture = device.makeTexture(descriptor: outputTextureDescriptor) else {
+        fatalError("Could not create output texture")
     }
 
-    renderEncoder.setRenderPipelineState(renderPipelineState)
-
-    let vertices: [Float] = [
-        0.0,  0.7, 0.0, 1.0, // Top vertex
-        -0.7, -0.7, 0.0, 1.0, // Bottom-left vertex
-        0.7, -0.7, 0.0, 1.0  // Bottom-right vertex
+    let compareFunctions: [MTLCompareFunction] = [.less, .greater]
+    let swizzles: [MTLTextureSwizzleChannels] = [
+        MTLTextureSwizzleChannels(red: .red, green: .green, blue: .blue, alpha: .alpha),
+        MTLTextureSwizzleChannels(red: .one, green: .one, blue: .one, alpha: .one),
+        MTLTextureSwizzleChannels(red: .zero, green: .zero, blue: .zero, alpha: .zero),
+        MTLTextureSwizzleChannels(red: .red, green: .red, blue: .red, alpha: .red),
+        MTLTextureSwizzleChannels(red: .green, green: .green, blue: .green, alpha: .green),
+        MTLTextureSwizzleChannels(red: .blue, green: .blue, blue: .blue, alpha: .blue),
+        MTLTextureSwizzleChannels(red: .alpha, green: .alpha, blue: .alpha, alpha: .alpha),
+        MTLTextureSwizzleChannels(red: .alpha, green: .blue, blue: .green, alpha: .red),
     ]
-    renderEncoder.setVertexBytes(vertices, length: MemoryLayout<Float>.stride * vertices.count, index: 0)
-    renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-    renderEncoder.endEncoding()
-
-    commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
-
-    let bytesPerPixel = 4
-    let bytesPerRow = bytesPerPixel * texture.width
-    var imageBytes = [UInt8](repeating: 0, count: bytesPerRow * texture.height)
-
-    texture.getBytes(&imageBytes, bytesPerRow: bytesPerRow, from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
-
-    let colorSpace = CGColorSpaceCreateDeviceRGB()
-    let bitmapInfo = CGBitmapInfo(rawValue: texture.pixelFormat.cgImageAlphaInfo.rawValue | CGImageByteOrderInfo.order32Little.rawValue)
-
-    guard let dataProvider = CGDataProvider(data: Data(bytes: imageBytes, count: imageBytes.count) as CFData) else {
-        fatalError("Failed to create CGDataProvider.")
+    
+    func swizzleToString(_ sw: MTLTextureSwizzle) -> String {
+        switch sw {
+        case .red: return "r"
+        case .green: return "g"
+        case .blue: return "b"
+        case .alpha: return "a"
+        case .one: return "1"
+        case .zero: return "0"
+        default: return "?"
+        }
     }
 
-    guard let cgImage = CGImage(
-        width: texture.width,
-        height: texture.height,
-        bitsPerComponent: 8,
-        bitsPerPixel: bytesPerPixel * 8,
-        bytesPerRow: bytesPerRow,
-        space: colorSpace,
-        bitmapInfo: bitmapInfo,
-        provider: dataProvider,
-        decode: nil,
-        shouldInterpolate: false,
-        intent: .defaultIntent
-    ) else {
-        fatalError("Failed to create CGImage.")
-    }
+    for compareFunction in compareFunctions {
+        let samplerDescriptor = MTLSamplerDescriptor()
+        samplerDescriptor.compareFunction = compareFunction
+        guard let sampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
+            fatalError("Could not create sampler state")
+        }
 
-    let fileURL = URL(fileURLWithPath: "result.png")
-    guard let destination = CGImageDestinationCreateWithURL(fileURL as CFURL, UTType.png.identifier as CFString, 1, nil) else {
-        fatalError("Failed to create CGImageDestination for \(fileURL.lastPathComponent).")
-    }
+        print("compare: \(compareFunction == .less ? "less" : "greater")")
 
-    CGImageDestinationAddImage(destination, cgImage, nil)
-    guard CGImageDestinationFinalize(destination) else {
-        fatalError("Failed to write image to \(fileURL.lastPathComponent).")
-    }
+        for swizzle in swizzles {
+            let swizzleChannels = MTLTextureSwizzleChannels(red: swizzle.red, green: swizzle.green, blue: swizzle.blue, alpha: swizzle.alpha)
+            guard let textureView = depthTexture.makeTextureView(pixelFormat: depthTexture.pixelFormat, textureType: .type2D, levels: 0..<1, slices: 0..<1, swizzle: swizzleChannels) else {
+                 fatalError("Could not create texture view")
+            }
 
-    print("saved it to \(fileURL.path)")
+            guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+                fatalError("Could not create command buffer")
+            }
+            
+            let renderPassDescriptor = MTLRenderPassDescriptor()
+            renderPassDescriptor.colorAttachments[0].texture = outputTexture
+            renderPassDescriptor.colorAttachments[0].loadAction = .clear
+            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1.0)
+            renderPassDescriptor.colorAttachments[0].storeAction = .store
+
+            guard let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+                fatalError("Could not create render command encoder")
+            }
+
+            renderCommandEncoder.setRenderPipelineState(pipelineState)
+            renderCommandEncoder.setFragmentTexture(textureView, index: 0)
+            renderCommandEncoder.setFragmentSamplerState(sampler, index: 0)
+            renderCommandEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            renderCommandEncoder.endEncoding()
+
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+
+            var pixel = [UInt8](repeating: 0, count: 4)
+            let region = MTLRegionMake2D(0, 0, 1, 1)
+            outputTexture.getBytes(&pixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
+
+            print("\(Float(pixel[0]) / 255.0) \(Float(pixel[1]) / 255.0) \(Float(pixel[2]) / 255.0) \(Float(pixel[3]) / 255.0) : swizzle: \(swizzleToString(swizzle.red)) \(swizzleToString(swizzle.green)) \(swizzleToString(swizzle.blue)) \(swizzleToString(swizzle.alpha))")
+        }
+    }
+    exit(0)
 }
 
 main()
