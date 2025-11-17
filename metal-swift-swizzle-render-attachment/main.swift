@@ -50,6 +50,7 @@ func main() {
         alpha: .alpha
     )
 
+    print("makeTexture")
     guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
         fatalError("Failed to create texture.")
     }
@@ -86,6 +87,7 @@ func main() {
         fatalError("Failed to create Metal library from source: \(error)")
     }
 
+    print("makeShaders")
     let vertexFunction = library.makeFunction(name: "vertexShader")
     let fragmentFunction = library.makeFunction(name: "fragmentShader")
 
@@ -104,6 +106,7 @@ func main() {
 
     renderPipelineDescriptor.vertexDescriptor = vertexDescriptor
 
+    print("makePipeline")
     let renderPipelineState: MTLRenderPipelineState
     do {
         renderPipelineState = try device.makeRenderPipelineState(descriptor: renderPipelineDescriptor)
@@ -121,6 +124,7 @@ func main() {
     renderPassDescriptor.colorAttachments[0].loadAction = .clear
     renderPassDescriptor.colorAttachments[0].storeAction = .store
 
+    print("makeRenderCommandEncoder")
     guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
         fatalError("Failed to create render command encoder.")
     }
