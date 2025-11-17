@@ -49,7 +49,7 @@ func runOnDevice(on device: MTLDevice) {
                                    depth2d<float> texture [[texture(0)]],
                                    sampler smp [[sampler(0)]]) {
         constexpr float ref = 0.5;
-        float4 result = texture.gather_compare(smp, float2(0.5), ref);
+        float4 result = texture.gather_compare(smp, float2(0.3), ref);
         return result;
     }
     """
@@ -90,24 +90,13 @@ func runOnDevice(on device: MTLDevice) {
         fatalError("Could not create depth texture")
     }
 
-    // To initialize a private texture, we must use a command buffer.
-    // 1. Create a temporary buffer with the data.
-    // 2. Create a command buffer and a blit encoder.
-    // 3. Copy from the buffer to the texture.
-    let textureData: [Float32] = [0.2, 0.4, 0.6, 0.8]
-    let textureDataSize = textureData.count * MemoryLayout<Float32>.size
-    guard let stagingBuffer = device.makeBuffer(bytes: textureData, length: textureDataSize, options: []) else {
-        fatalError("Could not create staging buffer for texture data.")
-    }
-
-    guard let uploadCommandBuffer = commandQueue.makeCommandBuffer(),
-          let blitEncoder = uploadCommandBuffer.makeBlitCommandEncoder() else {
-        fatalError("Could not create command buffer or blit encoder for texture upload.")
-    }
-    blitEncoder.copy(from: stagingBuffer, sourceOffset: 0, sourceBytesPerRow: 2 * MemoryLayout<Float32>.size, sourceBytesPerImage: textureDataSize, sourceSize: MTLSize(width: 2, height: 2, depth: 1), to: depthTexture, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-    blitEncoder.endEncoding()
-    uploadCommandBuffer.commit()
-    uploadCommandBuffer.waitUntilCompleted()
+    // Initialize texture data directly
+    let textureDatas: [[Float32]] = [
+        [0.3, 0.05, 0.85, 0.45],
+        [0.45, 0.3, 0.05, 0.85],
+        [0.85, 0.45, 0.3, 0.05],
+        [0.05, 0.85, 0.45, 0.3],
+    ]
 
     let outputTextureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
     outputTextureDescriptor.usage = [.renderTarget, .shaderRead]
@@ -125,6 +114,10 @@ func runOnDevice(on device: MTLDevice) {
         MTLTextureSwizzleChannels(red: .blue, green: .blue, blue: .blue, alpha: .blue),
         MTLTextureSwizzleChannels(red: .alpha, green: .alpha, blue: .alpha, alpha: .alpha),
         MTLTextureSwizzleChannels(red: .alpha, green: .blue, blue: .green, alpha: .red),
+        MTLTextureSwizzleChannels(red: .one, green: .green, blue: .blue, alpha: .alpha),
+        MTLTextureSwizzleChannels(red: .zero, green: .green, blue: .blue, alpha: .alpha),
+        MTLTextureSwizzleChannels(red: .red, green: .one, blue: .blue, alpha: .alpha),
+        MTLTextureSwizzleChannels(red: .red, green: .zero, blue: .blue, alpha: .alpha),
     ]
     
     func swizzleToString(_ sw: MTLTextureSwizzle) -> String {
@@ -139,49 +132,57 @@ func runOnDevice(on device: MTLDevice) {
         }
     }
 
-    for compareFunction in compareFunctions {
-        let samplerDescriptor = MTLSamplerDescriptor()
-        samplerDescriptor.compareFunction = compareFunction
-        guard let sampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
-            fatalError("Could not create sampler state")
-        }
+    for textureData in textureDatas {
+        print(String(format: "\n--------\nTexels:\n  %.1f %.1f  AB\n  %.1f %.1f  RG\n", textureData[0], textureData[1], textureData[2], textureData[3]))
 
-        print("compare: \(compareFunction == .less ? "less" : "greater")")
+        let region = MTLRegionMake2D(0, 0, 2, 2)
+        depthTexture.replace(region: region, mipmapLevel: 0, withBytes: textureData, bytesPerRow: 2 * MemoryLayout<Float32>.size)
 
-        for swizzle in swizzles {
-            let swizzleChannels = MTLTextureSwizzleChannels(red: swizzle.red, green: swizzle.green, blue: swizzle.blue, alpha: swizzle.alpha)
-            guard let textureView = depthTexture.makeTextureView(pixelFormat: depthTexture.pixelFormat, textureType: .type2D, levels: 0..<1, slices: 0..<1, swizzle: swizzleChannels) else {
-                 fatalError("Could not create texture view")
+
+        for compareFunction in compareFunctions {
+            let samplerDescriptor = MTLSamplerDescriptor()
+            samplerDescriptor.compareFunction = compareFunction
+            guard let sampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
+                fatalError("Could not create sampler state")
             }
 
-            guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-                fatalError("Could not create command buffer")
+            print("compare: 0.5 \(compareFunction == .less ? "less than" : "greater than") texel")
+
+            for swizzle in swizzles {
+                let swizzleChannels = MTLTextureSwizzleChannels(red: swizzle.red, green: swizzle.green, blue: swizzle.blue, alpha: swizzle.alpha)
+                guard let textureView = depthTexture.makeTextureView(pixelFormat: depthTexture.pixelFormat, textureType: .type2D, levels: 0..<1, slices: 0..<1, swizzle: swizzleChannels) else {
+                     fatalError("Could not create texture view")
+                }
+
+                guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+                    fatalError("Could not create command buffer")
+                }
+                
+                let renderPassDescriptor = MTLRenderPassDescriptor()
+                renderPassDescriptor.colorAttachments[0].texture = outputTexture
+                renderPassDescriptor.colorAttachments[0].loadAction = .clear
+                renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1.0)
+                renderPassDescriptor.colorAttachments[0].storeAction = .store
+
+                guard let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+                    fatalError("Could not create render command encoder")
+                }
+
+                renderCommandEncoder.setRenderPipelineState(pipelineState)
+                renderCommandEncoder.setFragmentTexture(textureView, index: 0)
+                renderCommandEncoder.setFragmentSamplerState(sampler, index: 0)
+                renderCommandEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                renderCommandEncoder.endEncoding()
+
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+
+                var pixel = [UInt8](repeating: 0, count: 4)
+                let region = MTLRegionMake2D(0, 0, 1, 1)
+                outputTexture.getBytes(&pixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
+
+                print("\(Float(pixel[0]) / 255.0) \(Float(pixel[1]) / 255.0) \(Float(pixel[2]) / 255.0) \(Float(pixel[3]) / 255.0) : swizzle: \(swizzleToString(swizzle.red)) \(swizzleToString(swizzle.green)) \(swizzleToString(swizzle.blue)) \(swizzleToString(swizzle.alpha))")
             }
-            
-            let renderPassDescriptor = MTLRenderPassDescriptor()
-            renderPassDescriptor.colorAttachments[0].texture = outputTexture
-            renderPassDescriptor.colorAttachments[0].loadAction = .clear
-            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.3, green: 0.3, blue: 0.3, alpha: 1.0)
-            renderPassDescriptor.colorAttachments[0].storeAction = .store
-
-            guard let renderCommandEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-                fatalError("Could not create render command encoder")
-            }
-
-            renderCommandEncoder.setRenderPipelineState(pipelineState)
-            renderCommandEncoder.setFragmentTexture(textureView, index: 0)
-            renderCommandEncoder.setFragmentSamplerState(sampler, index: 0)
-            renderCommandEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            renderCommandEncoder.endEncoding()
-
-            commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
-
-            var pixel = [UInt8](repeating: 0, count: 4)
-            let region = MTLRegionMake2D(0, 0, 1, 1)
-            outputTexture.getBytes(&pixel, bytesPerRow: 4, from: region, mipmapLevel: 0)
-
-            print("\(Float(pixel[0]) / 255.0) \(Float(pixel[1]) / 255.0) \(Float(pixel[2]) / 255.0) \(Float(pixel[3]) / 255.0) : swizzle: \(swizzleToString(swizzle.red)) \(swizzleToString(swizzle.green)) \(swizzleToString(swizzle.blue)) \(swizzleToString(swizzle.alpha))")
         }
     }
 }
