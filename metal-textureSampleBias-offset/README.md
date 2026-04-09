@@ -17,19 +17,19 @@ Here is the MSL
 
 To explain the code
 
-`baseCoords`: this the texture coordinate we are trying to sample (*)
+`baseCoords`: this the texture coordinate we are trying to sample (before adding the offset)
 
-`derivativeBase`: This is a use to make derivatives but if you look at the math,
+`derivativeBase`: This is a used to make derivatives but if you look at the math,
                   it will be (0, 0) when we sample. The only thing this is used
                   for is to generate a derivative for the GPU to select a mip level
 
-`derivativeMult`: This is use to affect the derivate calculation.
+`derivativeMult`: This is used to affect the derivative calculation.
 
 In this particular case the derivative should instruct the GPU to select
 mip level 11.25567
 
 We then add in the hard coded bias(-9.655665566213429) so the actual mip
-sampled will be 11.25567 + -9.655665566213429 = ~1.6  This works
+sampled will be 11.25567 + -9.655665566213429 = ~1.6  This works as you can see from the result.
 
 The Bug is with the offset. A mip level of 1.6 means we will sample mip levels 1 and 2
 The texture is 12x12x4 (2d-array) with 3 mip levels
@@ -71,7 +71,7 @@ for the 4 pixels it needs to sample for linear filtering it should
 sample up one texel and given the tAddressMode = repeat it should wrap
 around
 
-That means these are the texels that should be samples in mip level 1
+That means these are the texels that should be sampled in mip level 1
 
 ```
        0   1   2   3   4   5 
@@ -90,7 +90,7 @@ That means these are the texels that should be samples in mip level 1
      ╚═══╧═══╧═══╧═══╧═══╧═══╝
 ```
 
-But if we check what's being sample by M1/M2 GPU it's this
+But if we check what's being sampled by M1/M2 GPU it's this
 
 ```
        0   1   2   3   4   5 
@@ -128,3 +128,5 @@ at: [0, 1, 0], weight: 0.51765
 at: [0, 2, 0], weight: 0.07451
 mip level (2) weight: 0.59216
 ```
+
+Note: This issue only seems to exist with `bias`.  Without bias, all texture samplers work correctly, even with offsets.
