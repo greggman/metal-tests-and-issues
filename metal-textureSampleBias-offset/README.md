@@ -130,3 +130,10 @@ mip level (2) weight: 0.59216
 ```
 
 Note: This issue only seems to exist with `bias`.  Without bias, all texture samplers work correctly, even with offsets.
+
+You can test other formats here:
+https://gpuweb.github.io/cts/standalone/?q=webgpu:shader,execution,expression,call,builtin,textureSampleBias:*&runnow=1&debug=1
+
+You'll generally only see failures on compressed texture formats. This is not because the bug is specifc to compressed texture formats. It's because the bug only shows up when the textures are larger than a certain size. The tests choose a size based on blockSize. For something like rgb8unorm it ends up picking 8x8. For something like bc7-rgba-unorm-srgb it picks 12x12 (3x3 blocks). When it fails it uses a format like rgba8unorm to do the white/black pixel bisect since setting individual white/black in a compressed texture is not possible. That means the issus is more general than compressed textures.
+
+Maybe we should update those tests to chose a 12x12 instead of 8x8 if it surfaces more issues.
