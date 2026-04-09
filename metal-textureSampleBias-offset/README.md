@@ -34,9 +34,11 @@ sampled will be 11.25567 + -9.655665566213429 = ~1.6  This works as you can see 
 The Bug is with the offset. A mip level of 1.6 means we will sample mip levels 1 and 2
 The texture is 12x12x4 (2d-array) with 3 mip levels
 
+```
 Mip level 0: 12x12
 Mip leve1 1: 6x6
 Mip level 2: 3x3
+```
 
 For mip level 1: The baseCoords of float2(0.20833333333333334, 0.5416666666666666)
 translate to texel (1.250, 3.250)
